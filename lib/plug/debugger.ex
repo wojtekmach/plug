@@ -128,6 +128,22 @@ defmodule Plug.Debugger do
             %Plug.Conn{path_info: ["__plug__", "debugger", "action"], method: "POST"} ->
               Plug.Debugger.run_action(conn)
 
+            %Plug.Conn{path_info: ["__plug__", "debugger", "restart"], method: "GET"} ->
+              body = """
+              <html>
+              <head>
+                <script type="text/javascript" src="/js/app.js"></script>
+              </head>
+              <body>
+              Restarting... (TODO: indicator)
+              </body>
+              </html>
+              """
+
+              conn
+              |> send_resp(200, body)
+              |> halt()
+
             %Plug.Conn{} ->
               super(conn, opts)
           end
@@ -224,16 +240,41 @@ defmodule Plug.Debugger do
 
   def run_action(%Plug.Conn{} = conn) do
     with %Plug.Conn{body_params: params} <- fetch_body_params(conn),
-         {:ok, {module, function, args}} <-
-           Plug.Crypto.verify(conn.secret_key_base, @salt, params["encoded_handler"]) do
-      apply(module, function, args)
+         {:ok, handler} <- verify_handler(conn, params) do
+      case handler do
+        {module, function, args} ->
+          apply(module, function, args)
 
-      conn
-      |> Plug.Conn.put_resp_header("location", params["last_path"] || "/")
-      |> send_resp(302, "")
-      |> halt()
+          conn
+          |> Plug.Conn.put_resp_header("location", params["last_path"] || "/")
+          |> send_resp(302, "")
+          |> halt()
+
+        :restart ->
+          :init.restart()
+          # TODO: redirect to where we were
+          location = "/__plug__/debugger/restart"
+
+          conn
+          |> Plug.Conn.put_resp_header("location", location)
+          |> send_resp(302, "Restarting...")
+          |> halt()
+      end
     else
       _ -> raise "could not run Plug.Debugger action"
+    end
+  end
+
+  defp verify_handler(conn, params) do
+    case Plug.Crypto.verify(conn.secret_key_base, @salt, params["encoded_handler"]) do
+      {:ok, {_module, _function, _args}} = ok ->
+        ok
+
+      {:ok, :restart} = ok ->
+        ok
+
+      other ->
+        other
     end
   end
 
